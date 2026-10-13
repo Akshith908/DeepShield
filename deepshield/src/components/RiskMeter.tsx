@@ -8,6 +8,10 @@ interface RiskMeterProps {
 }
 
 function formatPrediction(prediction: string): string {
+  if (!prediction) {
+    return 'ANALYZING';
+  }
+
   switch (prediction) {
     case 'LIKELY_AI_GENERATED':
       return 'AI GENERATED';
@@ -23,7 +27,7 @@ function formatPrediction(prediction: string): string {
 
     default:
       return prediction
-      .replaceAll('_', ' ')
+      .replace(/_/g, ' ')
       .replace('LIKELY ', '');
   }
 }

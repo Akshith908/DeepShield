@@ -1,11 +1,42 @@
 import { AnalysisResult } from '../types/analysis';
 
-const BACKEND_URL = 'http://127.0.0.1:8000/analyze';
+// Backend endpoint, overridable per environment via VITE_BACKEND_URL.
+// Default '' = same origin: `npm start` (server.js) runs the FastAPI
+// backend behind this app and proxies /analyze. For frontend-only dev
+// (`npm run dev`), set VITE_BACKEND_URL=http://127.0.0.1:8000 in .env.local.
+const BACKEND_BASE =
+  (import.meta.env.VITE_BACKEND_URL as string | undefined) ?? '';
+
+const BACKEND_URL = BACKEND_BASE.replace(/\/$/, '') + '/analyze';
+
+// Hard cap on a single analysis request (video can legitimately take a
+// while, but the UI should never hang forever on a dead server).
+const REQUEST_TIMEOUT_MS = 330_000;
+
+// Provider responses are untrusted input: a missing or malformed field must
+// degrade to a sane default instead of rendering "NaN%" in the gauge.
+function toFiniteNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function isUsableScore(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
 
 function getRecommendation(
   riskScore: number,
   prediction: string
 ): string {
+  if (prediction === 'INCONCLUSIVE') {
+    return 'The analysis was inconclusive. Treat this media as unverified and confirm its authenticity with the original source before relying on it.';
+  }
+
   if (
     prediction === 'LIKELY_MANIPULATED' ||
     prediction === 'LIKELY_AI_GENERATED' ||
@@ -30,7 +61,7 @@ function getSignalDescription(
   provider: string
 ): string {
   const scoreText =
-  typeof signal.score === 'number'
+  isUsableScore(signal.score)
   ? ` Detection score: ${signal.score.toFixed(1)}%.`
   : '';
 
@@ -47,19 +78,34 @@ export async function analyzeMedia(
   const formData = new FormData();
   formData.append('file', file);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    REQUEST_TIMEOUT_MS
+  );
+
   let response: Response;
 
   try {
     response = await fetch(BACKEND_URL, {
       method: 'POST',
       body: formData,
+      signal: controller.signal,
     });
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(
+        'The analysis took too long and was cancelled. Please try again with a smaller file.'
+      );
+    }
+
     console.error('Network error:', error);
 
     throw new Error(
-      'Unable to reach the DeepShield analysis server. Please ensure the backend is running on port 8000.'
+      'Unable to reach the DeepShield analysis server. Please ensure the backend is running and VITE_BACKEND_URL is configured.'
     );
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   let data: any;
@@ -73,6 +119,10 @@ export async function analyzeMedia(
   }
 
   if (!response.ok) {
+    if (response.status === 413) {
+      throw new Error(data.detail || 'The file is too large to analyze.');
+    }
+
     throw new Error(
       data.detail ||
       `Analysis failed with status ${response.status}.`
@@ -97,18 +147,42 @@ export async function analyzeMedia(
   ?.toUpperCase() ||
   'UNKNOWN';
 
+  // Clamp and validate everything before it reaches the UI.
+  const riskScore = clamp(toFiniteNumber(data.risk_score, 0), 0, 100);
+
+  const riskLevel =
+  data.risk_level === 'LOW' ||
+  data.risk_level === 'MEDIUM' ||
+  data.risk_level === 'HIGH'
+  ? data.risk_level
+  : riskScore < 30
+  ? 'LOW'
+  : riskScore < 70
+  ? 'MEDIUM'
+  : 'HIGH';
+
   return {
-    riskScore: Number(data.risk_score),
+    riskScore,
 
-    riskLevel: data.risk_level,
+    riskLevel,
 
-    prediction: data.prediction,
+    prediction:
+    typeof data.prediction === 'string' && data.prediction
+    ? data.prediction
+    : 'INCONCLUSIVE',
 
-    confidence: `${Number(data.confidence).toFixed(1)}%`,
+    confidence: `${clamp(
+      toFiniteNumber(data.confidence, 0),
+      0,
+      100
+    ).toFixed(1)}%`,
 
-    analysisTime: Number(data.analysis_time),
+    analysisTime: toFiniteNumber(data.analysis_time, 0),
 
-    mediaType: data.media_type,
+    mediaType:
+    typeof data.media_type === 'string' && data.media_type
+    ? data.media_type
+    : 'unknown',
 
     format,
 
@@ -119,9 +193,9 @@ export async function analyzeMedia(
           name: signal.name || 'Detection Signal',
 
           value:
-          typeof signal.score === 'number'
+          isUsableScore(signal.score)
         ? `${signal.value || 'UNKNOWN'} • ${signal.score.toFixed(1)}%`
-        : signal.value || 'UNKNOWN',
+        : signal.value || 'NO SCORE',
 
         description: getSignalDescription(
           signal,
@@ -131,8 +205,10 @@ export async function analyzeMedia(
       ),
 
       recommendation: getRecommendation(
-        Number(data.risk_score),
-                                        data.prediction
+        riskScore,
+        typeof data.prediction === 'string' && data.prediction
+        ? data.prediction
+        : 'INCONCLUSIVE'
       ),
   };
 }

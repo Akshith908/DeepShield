@@ -2,5 +2,5 @@
   "name": "DeepShield",
   "description": "Multimodal cybersecurity tool that analyzes uploaded media for potential AI-generated or manipulated content. VERIFY BEFORE YOU TRUST.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

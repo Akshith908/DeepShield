@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { UploadZone } from './components/UploadZone';
 import { FilePreview } from './components/FilePreview';
@@ -33,6 +33,11 @@ export default function App() {
   const [error, setError] =
   useState<string | null>(null);
 
+  // Use ref for synchronous duplicate submission prevention
+  // React state updates are async, so isAnalyzing state alone
+  // doesn't prevent rapid double-submissions before re-render
+  const isAnalyzingRef = useRef(false);
+
   const handleFileSelect = (file: File) => {
     setSelectedFile(file);
     setError(null);
@@ -43,9 +48,15 @@ export default function App() {
     setError(null);
   };
 
-  const handleAnalyze = async () => {
-    if (!selectedFile) return;
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  const handleAnalyze = async () => {
+    // Check ref first for immediate synchronous guard
+    if (!selectedFile || isAnalyzingRef.current) return;
+
+    // Set both ref and state to prevent duplicate submissions
+    isAnalyzingRef.current = true;
+    setIsAnalyzing(true);
     setAppState('ANALYZING');
     setError(null);
 
@@ -68,6 +79,9 @@ export default function App() {
 
       setError(message);
       setAppState('ERROR');
+    } finally {
+      isAnalyzingRef.current = false;
+      setIsAnalyzing(false);
     }
   };
 
@@ -145,7 +159,10 @@ export default function App() {
         STATE: ANALYZING
         ========================= */}
         {appState === 'ANALYZING' && (
-          <AnalysisLoader />
+          <AnalysisLoader
+            mediaType={selectedFile?.type?.split('/')[0]}
+            fileName={selectedFile?.name}
+          />
         )}
 
         {/* =========================

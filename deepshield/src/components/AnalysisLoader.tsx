@@ -1,139 +1,138 @@
-import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import {
-  CheckCircle2,
-  Loader2,
-  Circle,
-} from 'lucide-react';
+import { Shield } from 'lucide-react';
 
-const STAGES = [
-  'File received',
-'Extracting media features',
-'Running deepfake detection',
-'Evaluating manipulation risk',
-'Generating security assessment',
-];
+interface AnalysisLoaderProps {
+  mediaType?: string;
+  fileName?: string;
+}
 
-export function AnalysisLoader() {
-  const [currentStage, setCurrentStage] =
-  useState(0);
+function getStatusMessage(mediaType?: string): string {
+  if (!mediaType) {
+    return 'Submitting media for analysis...';
+  }
 
-  const [progress, setProgress] =
-  useState(8);
+  switch (mediaType.toLowerCase()) {
+    case 'image':
+      return 'Submitting image for analysis...';
+    case 'video':
+      return 'Submitting video for analysis...';
+    case 'audio':
+      return 'Waiting for audio detection results...';
+    default:
+      return 'Submitting media for analysis...';
+  }
+}
 
-  useEffect(() => {
-    const stageInterval = setInterval(() => {
-      setCurrentStage((current) => {
-        if (current < STAGES.length - 1) {
-          return current + 1;
-        }
-
-        return current;
-      });
-    }, 1500);
-
-    const progressInterval = setInterval(() => {
-      setProgress((current) => {
-        if (current >= 92) {
-          return current;
-        }
-
-        const increment =
-        Math.random() * 4 + 1;
-
-        return Math.min(
-          current + increment,
-          92
-        );
-      });
-    }, 700);
-
-    return () => {
-      clearInterval(stageInterval);
-      clearInterval(progressInterval);
-    };
-  }, []);
-
+export function AnalysisLoader({ mediaType, fileName }: AnalysisLoaderProps) {
   return (
     <div className="w-full max-w-2xl mx-auto mt-16 animate-in fade-in duration-700">
-    <div className="text-center mb-10">
-    <h2 className="text-3xl font-bold text-white mb-3">
-    Analyzing Media
-    </h2>
+      <div className="text-center mb-10">
+        <h2 className="text-3xl font-bold text-white mb-3">
+          Analyzing Your Media
+        </h2>
 
-    <p className="text-gray-400 text-lg">
-    Running deepfake detection models...
-    </p>
-    </div>
+        <p className="text-gray-400 text-lg">
+          {getStatusMessage(mediaType)}
+        </p>
+      </div>
 
-    <div className="bg-navy-800/50 border border-white/10 rounded-2xl p-8 backdrop-blur-sm shadow-xl">
-    <div className="w-full h-2 bg-navy-900 rounded-full overflow-hidden mb-2 border border-white/5">
-    <motion.div
-    className="h-full bg-electric-blue"
-    animate={{
-      width: `${progress}%`,
-    }}
-    transition={{
-      duration: 0.5,
-      ease: 'easeInOut',
-    }}
-    />
-    </div>
-
-    <div className="text-right text-xs text-gray-500 mb-8">
-    {Math.floor(progress)}% · Processing...
-    </div>
-
-    <div className="space-y-4 pl-4">
-    {STAGES.map((stage, index) => {
-      const isCompleted =
-      index < currentStage;
-
-      const isActive =
-      index === currentStage;
-
-      const isPending =
-      index > currentStage;
-
-      return (
-        <div
-        key={stage}
-        className={`flex items-center gap-4 transition-opacity duration-300 ${
-          isPending
-          ? 'opacity-40'
-          : 'opacity-100'
-        }`}
-        >
-        <div className="w-6 flex justify-center">
-        {isCompleted && (
-          <CheckCircle2 className="h-5 w-5 text-safe" />
-        )}
-
-        {isActive && (
-          <Loader2 className="h-5 w-5 text-electric-blue animate-spin" />
-        )}
-
-        {isPending && (
-          <Circle className="h-4 w-4 text-gray-500" />
-        )}
+      <div className="bg-navy-800/50 border border-white/10 rounded-2xl p-8 backdrop-blur-sm shadow-xl">
+        {/* Animated shield spinner */}
+        <div className="flex justify-center mb-8">
+          <motion.div
+            className="relative"
+            animate={
+              {
+                rotate: 360,
+              }
+            }
+            transition={
+              {
+                duration: 2,
+                repeat: Infinity,
+                repeatType: 'loop',
+              }
+            }
+          >
+            <Shield className="h-16 w-16 text-electric-blue/30" />
+            <Shield className="h-16 w-16 text-electric-blue absolute inset-0 animate-pulse" />
+          </motion.div>
         </div>
 
-        <span
-        className={`text-sm font-medium ${
-          isActive
-          ? 'text-electric-blue'
-          : isCompleted
-          ? 'text-gray-300'
-          : 'text-gray-500'
-        }`}
-        >
-        {stage}
-        </span>
+        {/* File info if available */}
+        {fileName && (
+          <div className="text-center mb-6">
+            <p className="text-sm text-gray-400 truncate max-w-md mx-auto">
+              <span className="text-gray-500">File:</span>
+              <span className="text-gray-300 ml-1">{fileName}</span>
+            </p>
+
+            {mediaType && (
+              <p className="text-xs text-gray-500 mt-1 uppercase tracking-wider">
+                {mediaType}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Honest status message */}
+        <div className="text-center space-y-3">
+          <p className="text-gray-400 text-sm leading-relaxed">
+            DeepShield is waiting for the detection provider's result.
+            Processing time depends on the media type and external provider.
+          </p>
+
+          <div className="flex justify-center gap-2 pt-2">
+            <motion.div
+              className="w-2 h-2 rounded-full bg-electric-blue/50"
+              animate={
+                {
+                  opacity: [0.3, 1, 0.3],
+                }
+              }
+              transition={
+                {
+                  duration: 1.5,
+                  repeat: Infinity,
+                  repeatType: 'loop',
+                }
+              }
+            />
+
+            <motion.div
+              className="w-2 h-2 rounded-full bg-cyan-accent/50"
+              animate={
+                {
+                  opacity: [0.3, 1, 0.3],
+                }
+              }
+              transition={
+                {
+                  duration: 1.5,
+                  repeat: Infinity,
+                  repeatType: 'loop',
+                }
+              }
+            />
+
+            <motion.div
+              className="w-2 h-2 rounded-full bg-electric-blue/50"
+              animate={
+                {
+                  opacity: [0.3, 1, 0.3],
+                }
+              }
+              transition={
+                {
+                  duration: 1.5,
+                  repeat: Infinity,
+                  repeatType: 'loop',
+                }
+              }
+            />
+          </div>
         </div>
-      );
-    })}
-    </div>
-    </div>
+      </div>
     </div>
   );
 }

@@ -11,7 +11,7 @@ export function SecurityRecommendation({ score, recommendation }: SecurityRecomm
   const bgColor = getRiskColorBg(score);
   const borderColor = getRiskColorBorder(score);
   
-  const Icon = score <= 30 ? ShieldCheck : score <= 60 ? AlertTriangle : ShieldAlert;
+  const Icon = score < 30 ? ShieldCheck : score < 70 ? AlertTriangle : ShieldAlert;
 
   return (
     <div className={`mt-8 p-6 rounded-xl border ${borderColor} bg-navy-900/40 relative overflow-hidden`}>

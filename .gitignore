@@ -1,0 +1,14 @@
+# Environment / secrets (workspace-managed or local)
+.env
+.env.local
+.env.*.local
+
+# Runtime artifacts
+.vly-run/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Node
+node_modules/
