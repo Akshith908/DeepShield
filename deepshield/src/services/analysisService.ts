@@ -1,4 +1,4 @@
-import { AnalysisExplanation, AnalysisResult } from '../types/analysis';
+import { AnalysisExplanation, AnalysisResult, ProviderOutcome } from '../types/analysis';
 
 // Backend endpoint, overridable per environment via VITE_BACKEND_URL.
 // Default '' = same origin: `npm start` (server.js) runs the FastAPI
@@ -27,6 +27,55 @@ function clamp(value: number, min: number, max: number): number {
 
 function isUsableScore(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function parseProviderOutcomes(raw: unknown): ProviderOutcome[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+  const STATUSES = new Set(['OK', 'FAILED', 'UNAVAILABLE']);
+
+  const outcomes = raw
+    .filter(
+      (item: any) =>
+        item &&
+        typeof item.provider === 'string' &&
+        item.provider &&
+        STATUSES.has(item.status)
+    )
+    .map((item: any) => ({
+      provider: item.provider,
+      status: item.status,
+      prediction:
+        typeof item.prediction === 'string' && item.prediction
+          ? item.prediction
+          : undefined,
+      riskScore: isUsableScore(item.risk_score)
+        ? clamp(item.risk_score, 0, 100)
+        : undefined,
+      message:
+        typeof item.message === 'string' && item.message
+          ? item.message
+          : undefined,
+    }));
+
+  return outcomes.length > 0 ? outcomes : undefined;
+}
+
+function getErrorDetail(
+  detail: unknown,
+  status: number
+): string {
+  if (typeof detail === 'string' && detail) return detail;
+
+  if (
+    detail &&
+    typeof detail === 'object' &&
+    typeof (detail as Record<string, unknown>).message === 'string'
+  ) {
+    return (detail as Record<string, string>).message;
+  }
+
+  return `Analysis failed with status ${status}.`;
 }
 
 function getRecommendation(
@@ -124,6 +173,10 @@ function getSignalDescription(
 export async function analyzeMedia(
   file: File
 ): Promise<AnalysisResult> {
+  // User-side timing starts the moment the request begins; the caller
+  // measures the full user-visible span from the Analyze click.
+  const tRequestStart = performance.now();
+
   const formData = new FormData();
   formData.append('file', file);
 
@@ -157,6 +210,8 @@ export async function analyzeMedia(
     clearTimeout(timeoutId);
   }
 
+  const tResponse = performance.now();
+
   let data: any;
 
   try {
@@ -167,14 +222,18 @@ export async function analyzeMedia(
     );
   }
 
+  const tParsed = performance.now();
+
   if (!response.ok) {
     if (response.status === 413) {
       throw new Error(data.detail || 'The file is too large to analyze.');
     }
 
     throw new Error(
-      data.detail ||
-      `Analysis failed with status ${response.status}.`
+      // Sanitized 424 provider errors carry a structured detail object
+      // ({provider, file, message}); string details (413) pass through
+      // untouched. Anything malformed falls back to a generic message.
+      getErrorDetail(data.detail, response.status)
     );
   }
 
@@ -198,6 +257,22 @@ export async function analyzeMedia(
 
   // Clamp and validate everything before it reaches the UI.
   const riskScore = clamp(toFiniteNumber(data.risk_score, 0), 0, 100);
+
+  const timings = {
+    // From request start until response headers/body arrival.
+    requestMs: Math.round(tResponse - tRequestStart),
+    // JSON body parsing only.
+    parseMs: Math.round(tParsed - tResponse),
+    // Full run of this client-side function.
+    clientTotalMs: Math.round(performance.now() - tRequestStart),
+  };
+
+  console.info(
+    `[DeepShield timing] request=${timings.requestMs}ms ` +
+    `parse=${timings.parseMs}ms clientTotal=${timings.clientTotalMs}ms` +
+    ` server=${toFiniteNumber(data.analysis_time, 0).toFixed(2)}s` +
+    (data.request_id ? ` reqId=${data.request_id}` : '')
+  );
 
   const riskLevel =
   data.risk_level === 'LOW' ||
@@ -226,6 +301,9 @@ export async function analyzeMedia(
       100
     ).toFixed(1)}%`,
 
+    // Server-side processing time, as reported by the backend. The caller
+    // (App) stamps `totalTime` from the analysis click so the UI can
+    // distinguish server work from the full user-visible wait.
     analysisTime: toFiniteNumber(data.analysis_time, 0),
 
     mediaType:
@@ -254,6 +332,8 @@ export async function analyzeMedia(
     ),
 
     explanation: parseExplanation(data.explanation),
+
+    providers: parseProviderOutcomes(data.providers),
 
     recommendation: getRecommendation(
       riskScore,

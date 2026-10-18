@@ -1,7 +1,9 @@
+import logging
 import os
 import shutil
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,6 +32,9 @@ from utils.ratelimit import (
     analysis_slots,
 )
 from services.analyzer import analyze_file
+
+
+logger = logging.getLogger(__name__)
 
 
 app = FastAPI(
@@ -144,7 +149,7 @@ async def analyze(
             headers={"Retry-After": "5"},
         )
 
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     # Keep only a short, safe extension for the temp file so odd or
     # malicious filenames can never escape the temp directory.
@@ -152,6 +157,7 @@ async def analyze(
     suffix = raw_suffix if 0 < len(raw_suffix) <= 10 else ".bin"
 
     temp_path = None
+    request_id = uuid.uuid4().hex[:12]
 
     try:
 
@@ -183,14 +189,28 @@ async def analyze(
 
                 temp_file.write(chunk)
 
+        spool_done = time.perf_counter()
+
         result = await analyze_file(
             file_path=temp_path,
             filename=file.filename,
             media_type=media_type,
         )
 
+        analyze_done = time.perf_counter()
+
         analysis_time = (
-            time.time() - start_time
+            analyze_done - start_time
+        )
+
+        logger.info(
+            "request=%s media_type=%s bytes=%d spool=%.3fs analyze=%.3fs server_total=%.3fs",
+            request_id,
+            media_type,
+            bytes_written,
+            spool_done - start_time,
+            analysis_time,
+            analysis_time,
         )
 
         result["filename"] = file.filename
@@ -199,6 +219,10 @@ async def analyze(
             analysis_time,
             2,
         )
+
+        # Correlation id so a browser-side console timing can be matched
+        # with its server-side entry in the logs.
+        result["request_id"] = request_id
 
         return result
 

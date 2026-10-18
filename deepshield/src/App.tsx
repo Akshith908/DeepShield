@@ -6,6 +6,7 @@ import { AnalysisLoader } from './components/AnalysisLoader';
 import { RiskMeter } from './components/RiskMeter';
 import { ResultSummary } from './components/ResultSummary';
 import { ExplanationPanel } from './components/ExplanationPanel';
+import { ProviderStatusStrip } from './components/ProviderStatusStrip';
 import { SecurityRecommendation } from './components/SecurityRecommendation';
 import { AnalysisDetails } from './components/AnalysisDetails';
 import { MediaDetails } from './components/MediaDetails';
@@ -62,8 +63,13 @@ export default function App() {
     setError(null);
 
     try {
+      // Total user-visible analysis duration is measured here so the UI can
+      // distinguish it from the backend's server-processing metric.
+      const totalStart = performance.now();
       const analysisResult =
       await analyzeMedia(selectedFile);
+      analysisResult.totalTime =
+      Math.round(performance.now() - totalStart);
 
       setResult(analysisResult);
       setAppState('RESULTS');
@@ -221,6 +227,10 @@ export default function App() {
               {/* Explainable AI: score breakdown + decision rationale */}
               <ExplanationPanel
               explanation={result.explanation}
+              />
+              {/* Per-provider outcome ledger (partial failure/multi-provider) */}
+              <ProviderStatusStrip
+              providers={result.providers}
               />
 
               {/* Security advice */}

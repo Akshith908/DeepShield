@@ -83,5 +83,11 @@ describe('App RESULTS view shows the explanation', () => {
     expect(
       screen.getByText(/cross-model agreement check/i)
     ).toBeInTheDocument();
+
+    // Timing terminology: the server metric and the client-measured total
+    // are displayed as distinct, accurately-labelled values.
+    expect(screen.getByText('Server Processing Time')).toBeInTheDocument();
+    expect(screen.getByText('Total Analysis Time')).toBeInTheDocument();
+    expect(screen.getByText('2.50s')).toBeInTheDocument(); // server metric
   });
 });

@@ -1,6 +1,8 @@
 import asyncio
+import logging
 
 from fastapi import HTTPException
+from realitydefender.errors import RealityDefenderError
 
 from services.bitmind import (
     ProviderError,
@@ -13,6 +15,9 @@ from services.reality_defender import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def get_risk_level(score: float) -> str:
     if score < 30:
         return "LOW"
@@ -21,6 +26,203 @@ def get_risk_level(score: float) -> str:
         return "MEDIUM"
 
     return "HIGH"
+
+
+def combine_provider_payloads(
+    primary: dict | None,
+    secondary: dict | None = None,
+    secondary_error: dict | None = None,
+) -> dict:
+    """Cross-provider reliability layer (multi-provider extension point).
+
+    Today each media type routes to exactly one provider, so this function is
+    not yet on the live request path; it defines the tested semantics that a
+    future dual-provider flow must follow when running BitMind and Reality
+    Defender over the same media.
+
+    Semantics (all derivable from the inputs, never invented):
+    - Each provider outcome is reported individually as status OK / FAILED /
+      UNAVAILABLE, with its own prediction and score when available.
+    - Agreement: when both providers place the media in the same verdict
+      category, that verdict is reported. The combined risk score is the
+      higher of the two provider scores, reported as an explicit conservative
+      upper bound (never averaged, because provider scales are incompatible).
+    - Disagreement: the combined verdict becomes INCONCLUSIVE with the higher
+      provider score as the conservative upper bound; the explanation states
+      the conflict rather than presenting consensus or proof.
+    - One provider inconclusive: the other's verdict stands, with an added
+      reason noting the missing vote.
+    - Partial failure: the valid result is preserved verbatim and the failed
+      provider is reported as unavailable; no score is fabricated for it.
+    - A missing single-provider score is never converted into evidence of
+      authenticity (see INCONCLUSIVE handling in the normalizers).
+    """
+    if primary is None and secondary is None:
+        raise ValueError(
+            "combine_provider_payloads requires at least one provider result"
+        )
+
+    providers: list[dict] = []
+
+    def _entry(payload: dict) -> dict:
+        return {
+            "provider": payload.get("provider") or "provider",
+            "status": "OK",
+            "prediction": payload.get("prediction") or "INCONCLUSIVE",
+            "risk_score": payload.get("risk_score"),
+        }
+
+    if primary is not None:
+        providers.append(_entry(primary))
+    if secondary is not None:
+        providers.append(_entry(secondary))
+
+    if secondary_error:
+        providers.append({
+            "provider": secondary_error.get("provider") or "provider",
+            "status": (
+                "UNAVAILABLE"
+                if secondary_error.get("kind") == "unavailable"
+                else "FAILED"
+            ),
+            "message": (
+                secondary_error.get("message")
+                or "The provider did not return a usable result."
+            ),
+        })
+
+    concern = {"LIKELY_AI_GENERATED", "LIKELY_MANIPULATED"}
+
+    if primary is not None and secondary is not None:
+        p_pred = primary.get("prediction") or "INCONCLUSIVE"
+        s_pred = secondary.get("prediction") or "INCONCLUSIVE"
+        p_risk = float(primary.get("risk_score") or 0.0)
+        s_risk = float(secondary.get("risk_score") or 0.0)
+        upper = round(max(p_risk, s_risk), 1)
+
+        def _category(prediction: str) -> str | None:
+            if prediction in concern:
+                return "concern"
+            if prediction == "LIKELY_AUTHENTIC":
+                return "authentic"
+            return None
+
+        p_cat = _category(p_pred)
+        s_cat = _category(s_pred)
+
+        if p_cat is not None and p_cat == s_cat:
+            combined_prediction = p_pred
+        elif p_cat is not None and s_cat is None:
+            # One provider returned no verdict: the available verdict stands,
+            # with the uncertainty called out in the explanation.
+            combined_prediction = p_pred
+        elif s_cat is not None and p_cat is None:
+            combined_prediction = s_pred
+        else:
+            # Both inconclusive or outright disagreement.
+            combined_prediction = "INCONCLUSIVE"
+
+        combined_signals = []
+        for payload in (primary, secondary):
+            for signal in payload.get("signals") or []:
+                if isinstance(signal.get("score"), (int, float)):
+                    combined_signals.append({
+                        "name": (
+                            f"{payload.get('provider')} — "
+                            f"{signal.get('name') or 'Detection signal'}"
+                        ),
+                        "value": signal.get("value") or "",
+                        "score": float(signal["score"]),
+                    })
+
+        combined = {
+            "success": primary.get("success", True),
+            "media_type": primary.get("media_type") or "media",
+            "provider": "Multiple providers",
+            "prediction": combined_prediction,
+            "risk_score": upper,
+            "risk_level": get_risk_level(upper),
+            "confidence": min(
+                float(primary.get("confidence") or 0.0),
+                float(secondary.get("confidence") or 0.0),
+            ),
+            "providers": providers,
+            "signals": combined_signals,
+        }
+
+        explanation = build_explanation(dict(
+            combined,
+            signals=combined_signals,
+        ))
+
+        if p_cat is not None and p_cat == s_cat:
+            explanation["reasons"].insert(
+                0,
+                f"{primary.get('provider')} and {secondary.get('provider')} agree "
+                f"on the '{p_pred}' verdict category; both provider scores are "
+                f"shown below under the combined score. Agreement is not proof "
+                f"of correctness.",
+            )
+        elif p_pred != "INCONCLUSIVE" and s_pred != "INCONCLUSIVE":
+            explanation["reasons"].insert(
+                0,
+                f"{primary.get('provider')} ({p_pred}) and {secondary.get('provider')} "
+                f"({s_pred}) disagree, so no single verdict is attributed. The "
+                f"combined score is the higher provider score as a conservative "
+                f"upper bound, not an average.",
+            )
+            explanation["caveat"] = (
+                "The providers returned conflicting verdicts, so the overall "
+                "interpretation is uncertain. Verify the media through an "
+                "independent source before relying on either individual score."
+            )
+        else:
+            if p_pred == "INCONCLUSIVE" and s_pred == "INCONCLUSIVE":
+                explanation["reasons"].insert(
+                    0,
+                    "Neither provider produced a final verdict, so the combined "
+                    "interpretation is uncertain.",
+                )
+            else:
+                missing = (
+                    primary.get("provider")
+                    if p_pred == "INCONCLUSIVE"
+                    else secondary.get("provider")
+                )
+                explanation["reasons"].insert(
+                    0,
+                    f"{missing} returned no final verdict, so the combined "
+                    f"interpretation is uncertain.",
+                )
+
+        combined["explanation"] = explanation
+
+        return combined
+
+    # Single-provider outcome (or partial failure): preserve the valid result
+    # verbatim, extend it with the provider ledger, and add honest reasons
+    # about the provider that could not contribute.
+    base = primary if primary is not None else secondary
+    combined = dict(base or {})
+    combined["providers"] = providers
+
+    explanation = combined.get("explanation") or build_explanation(combined)
+    if combined.get("explanation") is None:
+        combined["explanation"] = explanation
+
+    for entry in providers:
+        if entry["status"] != "OK":
+            provider_name = entry["provider"]
+            explanation["reasons"].insert(
+                0,
+                f"{provider_name} could not contribute an analysis result "
+                f"({entry['status'].lower()}). This verdict rests entirely on "
+                f"the remaining provider's output.",
+            )
+
+    combined["explanation"] = explanation
+
+    return combined
 
 
 def safe_percent(value, default: float = 0.0) -> float:
@@ -161,6 +363,17 @@ def normalize_bitmind(
     result: dict,
     media_type: str,
 ) -> dict:
+    """Translate a BitMind response into the shared normalized payload.
+
+    Score semantics: BitMind's `confidence` is the detector's own model
+    confidence in the `isAI` flag — it is NOT a calibrated manipulation
+    probability and its 30/70 risk bands here are reporting bands, not
+    provider-documented probability cutoffs. For authentic verdicts the risk
+    score expresses residual uncertainty (100% - confidence), which follows
+    the same rule the provider exposes; on genuine two-provider flows the
+    incompatible score semantics are never averaged (see
+    combine_provider_payloads).
+    """
 
     is_ai = bool(result.get("isAI", False))
     confidence = max(0.0, min(1.0, float(result.get("confidence", 0) or 0)))
@@ -251,6 +464,35 @@ def normalize_reality_defender(result: dict) -> dict:
     })
 
 
+def _reality_defender_error_to_http(
+    error: RealityDefenderError,
+    filename: str,
+) -> HTTPException:
+    """Convert an SDK provider error into the same sanitized FastAPI response
+    shape used for BitMind failures (HTTP 424, Failed Dependency).
+
+    The SDK error message is logged for operators but never forwarded: the
+    response body omits the API key, the uploaded media bytes, and raw
+    SDK/traceback details.
+    """
+    logger.warning(
+        "reality_defender failed for %s: %s",
+        filename,
+        error,
+    )
+
+    return HTTPException(
+        status_code=424,
+        detail={
+            "provider": "Reality Defender",
+            "file": filename,
+            "message": "The external analysis provider rejected or failed the request. "
+            "The request is safe to retry. If the problem persists, verify the "
+            "provider API key configuration.",
+        },
+    )
+
+
 def _provider_error_to_http(
     error: ProviderError,
 ) -> HTTPException:
@@ -315,9 +557,15 @@ async def analyze_file(
 
     if media_type == "audio":
 
-        result = await analyze_audio(
-            file_path
-        )
+        try:
+            result = await analyze_audio(
+                file_path
+            )
+        except RealityDefenderError as error:
+            raise _reality_defender_error_to_http(
+                error,
+                filename,
+            ) from error
 
         return normalize_reality_defender(
             result

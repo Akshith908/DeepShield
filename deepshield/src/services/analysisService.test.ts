@@ -100,6 +100,36 @@ describe('analyzeMedia explanation handling', () => {
     expect(result.explanation).toBeUndefined();
   });
 
+  it('sanitized 424 detail objects surface their message, not "[object Object]"', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 424,
+      json: () => Promise.resolve({
+        detail: {
+          provider: 'Reality Defender',
+          file: 'clip.wav',
+          message: 'The external analysis provider rejected or failed the request.',
+        },
+      }),
+    }));
+
+    await expect(analyzeMedia(makeFile())).rejects.toThrow(
+      'The external analysis provider rejected or failed the request.'
+    );
+  });
+
+  it('malformed 424 detail objects fall back to a generic message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 424,
+      json: () => Promise.resolve({ detail: { unexpected: 'shape' } }),
+    }));
+
+    await expect(analyzeMedia(makeFile())).rejects.toThrow(
+      'Analysis failed with status 424.'
+    );
+  });
+
   it('malformed contributions are filtered, not dropped wholesale', async () => {
     vi.stubGlobal('fetch', mockBackend({
       ...REP_PAYLOAD,

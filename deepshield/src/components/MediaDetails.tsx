@@ -20,7 +20,7 @@ export function MediaDetails({
     Media Details
     </h3>
 
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
     {/* Media Type */}
     <div className="bg-navy-900/50 rounded-lg p-4 border border-white/5 flex flex-col gap-2">
     <div className="flex items-center gap-2 text-gray-500 text-xs font-semibold uppercase tracking-wider">
@@ -57,11 +57,12 @@ export function MediaDetails({
     </span>
     </div>
 
-    {/* Analysis Time */}
+    {/* Server Processing Time (e.g. upload handling, provider call,
+        normalization; measured server-side) */}
     <div className="bg-navy-900/50 rounded-lg p-4 border border-white/5 flex flex-col gap-2">
     <div className="flex items-center gap-2 text-gray-500 text-xs font-semibold uppercase tracking-wider">
     <Clock className="h-3.5 w-3.5" />
-    Analysis Time
+    Server Processing Time
     </div>
 
     <span className="text-gray-200 font-medium">
@@ -70,6 +71,21 @@ export function MediaDetails({
       : 'N/A'}
       </span>
       </div>
+
+      {/* Total Analysis Time (client-measured from the Analyze click through
+          result delivery; includes upload transit and backend wait) */}
+      <div className="bg-navy-900/50 rounded-lg p-4 border border-white/5 flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-gray-500 text-xs font-semibold uppercase tracking-wider">
+      <Clock className="h-3.5 w-3.5" />
+      Total Analysis Time
+      </div>
+
+      <span className="text-gray-200 font-medium">
+      {typeof result.totalTime === 'number'
+        ? `${(result.totalTime / 1000).toFixed(2)}s`
+        : 'N/A'}
+        </span>
+        </div>
 
       {/* Confidence */}
       <div className="bg-navy-900/50 rounded-lg p-4 border border-white/5 flex flex-col gap-2">
