@@ -56,6 +56,10 @@ def combine_provider_payloads(
       provider is reported as unavailable; no score is fabricated for it.
     - A missing single-provider score is never converted into evidence of
       authenticity (see INCONCLUSIVE handling in the normalizers).
+    - `confidence` is the minimum of the two provider confidences on both
+      agreement and disagreement. This is deliberately conservative: a combined
+      read is never more confident than its least confident contributor, and a
+      disputed frame is never more confident than the weaker side.
     """
     if primary is None and secondary is None:
         raise ValueError(
