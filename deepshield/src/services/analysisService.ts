@@ -29,12 +29,21 @@ function isUsableScore(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function parseProviderOutcomes(raw: unknown): ProviderOutcome[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+/**
+ * Normalize the backend's `providers` ledger into the shape the UI consumes.
+ *
+ * Legacy parser (`parseProviderOutcomes`) was removed because it was only
+ * used by the stale `providerRouting` path. The main analysis path now uses
+ * this helper directly.
+ */
+function normalizeProviders(
+  raw: unknown,
+): ProviderOutcome[] {
+  if (!Array.isArray(raw) || raw.length === 0) return [];
 
   const STATUSES = new Set(['OK', 'FAILED', 'UNAVAILABLE']);
 
-  const outcomes = raw
+  const out = raw
     .filter(
       (item: any) =>
         item &&
@@ -44,7 +53,7 @@ function parseProviderOutcomes(raw: unknown): ProviderOutcome[] | undefined {
     )
     .map((item: any) => ({
       provider: item.provider,
-      status: item.status,
+      status: item.status as ProviderOutcome['status'],
       prediction:
         typeof item.prediction === 'string' && item.prediction
           ? item.prediction
@@ -58,7 +67,7 @@ function parseProviderOutcomes(raw: unknown): ProviderOutcome[] | undefined {
           : undefined,
     }));
 
-  return outcomes.length > 0 ? outcomes : undefined;
+  return out.length > 0 ? out : [];
 }
 
 function getErrorDetail(
@@ -333,7 +342,7 @@ export async function analyzeMedia(
 
     explanation: parseExplanation(data.explanation),
 
-    providers: parseProviderOutcomes(data.providers),
+    providers: normalizeProviders(data.providers),
 
     recommendation: getRecommendation(
       riskScore,
