@@ -31,6 +31,132 @@ def safe_percent(value, default: float = 0.0) -> float:
         return default
 
 
+def build_explanation(payload: dict) -> dict:
+    """Explainability layer: derive per-signal contributions and plain-language
+    reasons from the already-normalized analysis payload.
+
+    Deterministic and derived only from provider data we already have (no new
+    external calls). Contributions split the 0-100 risk score across detector
+    signals proportional to each signal's own evidence score, so the stated
+    points always sum to risk_score (within rounding). Reasons describe how the
+    score was computed and why the verdict follows.
+    """
+    prediction = payload.get("prediction") or "INCONCLUSIVE"
+    risk_score = float(payload.get("risk_score") or 0.0)
+    confidence = float(payload.get("confidence") or 0.0)
+    provider = payload.get("provider") or "provider"
+    media_type = payload.get("media_type") or "media"
+    signals = payload.get("signals") or []
+
+    scored = [
+        signal
+        for signal in signals
+        if isinstance(signal.get("score"), (int, float))
+    ]
+    total_evidence = sum(float(s["score"]) for s in scored)
+
+    contributions = []
+    for signal in scored:
+        score = float(signal["score"])
+        share = (score / total_evidence) if total_evidence > 0 else 0.0
+        contributions.append({
+            "name": signal.get("name") or "Detection signal",
+            "value": str(signal.get("value") or ""),
+            "score": round(score, 1),
+            "points": round(share * risk_score, 1),
+        })
+
+    if prediction == "LIKELY_AI_GENERATED":
+        summary = (
+            f"The {provider} detector flagged this {media_type} as AI-generated "
+            f"with {risk_score:.1f}% risk, above the 30% low-risk threshold."
+        )
+    elif prediction == "LIKELY_MANIPULATED":
+        summary = (
+            f"The {provider} detectors measured {risk_score:.1f}% manipulation "
+            f"risk for this {media_type}, above the 30% low-risk threshold."
+        )
+    elif prediction == "LIKELY_AUTHENTIC":
+        summary = (
+            f"No strong AI-generation signal was found; the {risk_score:.1f}% "
+            f"residual risk keeps this {media_type} below the 70% high-risk threshold."
+        )
+    else:
+        summary = (
+            f"The {provider} analysis did not reach a verdict, so no risk score "
+            f"was attributed. Treat this {media_type} as unverified."
+        )
+
+    reasons = []
+
+    if prediction == "INCONCLUSIVE":
+        reasons.append(
+            "Provider returned no final status (e.g. analysis still running or "
+            "models without a prediction), so the score is reported as 0."
+        )
+    elif provider == "BitMind":
+        if prediction == "LIKELY_AI_GENERATED":
+            reasons.append(
+                f"BitMind classified the file as AI-generated at {confidence:.1f}% "
+                f"confidence; risk score equals that confidence (90%+ means a "
+                f"forgery finding, 30-70% warrants verification)."
+            )
+        else:
+            reasons.append(
+                f"BitMind found no AI-generation signal; risk score is the "
+                f"remaining uncertainty (100% - {confidence:.1f}% confidence)."
+            )
+    else:
+        reasons.append(
+            f"{provider} returned an aggregate {risk_score:.1f}% score for this "
+            f"{media_type} file; each detection model's own score is listed below."
+        )
+
+    if contributions:
+        top = max(contributions, key=lambda c: c["points"])
+        reasons.append(
+            f"Largest contributor: {top['name']} ({top['value']}, "
+            f"{top['score']:.1f}%) accounted for +{top['points']:.1f} of the risk score."
+        )
+
+    if risk_score >= 70:
+        band = "strong"
+    elif risk_score >= 30:
+        band = "moderate"
+    else:
+        band = "low"
+    reasons.append(
+        f"{confidence:.1f}% model confidence and the {risk_score:.1f}% score "
+        f"translate to {risk_score:.1f}/100 risk ({band} evidence)."
+    )
+
+    caveat = None
+    if len(scored) <= 1:
+        caveat = (
+            "This verdict rests on a single detector's output, so there is no "
+            "cross-model agreement check. Scores near the 30-70% band should be "
+            "treated as inconclusive rather than proof."
+        )
+    elif 30 <= risk_score < 70:
+        caveat = (
+            "Score is in the 30-70% medium band: detectors disagree or evidence "
+            "is split, so independent verification is recommended."
+        )
+
+    return {
+        "summary": summary,
+        "reasons": reasons,
+        "contributions": contributions,
+        "caveat": caveat,
+    }
+
+
+def with_explanation(payload: dict) -> dict:
+    """Attach the explainability payload to a normalized analysis result."""
+    payload["explanation"] = build_explanation(payload)
+    return payload
+
+
 def normalize_bitmind(
     result: dict,
     media_type: str,
@@ -48,7 +174,7 @@ def normalize_bitmind(
         prediction = "LIKELY_AUTHENTIC"
         detection_status = "No strong AI-generation signal detected"
 
-    return {
+    return with_explanation({
         "success": True,
         "media_type": media_type,
         "prediction": prediction,
@@ -64,7 +190,7 @@ def normalize_bitmind(
                 "score": round(confidence * 100, 1),
             }
         ],
-    }
+    })
 
 
 def normalize_reality_defender(result: dict) -> dict:
@@ -113,7 +239,7 @@ def normalize_reality_defender(result: dict) -> dict:
             }
         )
 
-    return {
+    return with_explanation({
         "success": True,
         "media_type": "audio",
         "prediction": prediction,
@@ -122,7 +248,7 @@ def normalize_reality_defender(result: dict) -> dict:
         "confidence": round(risk_score, 1) if prediction != "INCONCLUSIVE" else 0.0,
         "provider": "Reality Defender",
         "signals": signals,
-    }
+    })
 
 
 def _provider_error_to_http(

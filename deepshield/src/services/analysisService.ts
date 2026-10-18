@@ -1,4 +1,4 @@
-import { AnalysisResult } from '../types/analysis';
+import { AnalysisExplanation, AnalysisResult } from '../types/analysis';
 
 // Backend endpoint, overridable per environment via VITE_BACKEND_URL.
 // Default '' = same origin: `npm start` (server.js) runs the FastAPI
@@ -50,6 +50,55 @@ function getRecommendation(
   }
 
   return 'Low manipulation risk detected. No strong indicators of AI-generated or manipulated content were found. For important decisions, always verify information through trusted sources.';
+}
+
+// Provider responses are untrusted input: only surface an explanation whose
+// shape we fully validate, so a malformed payload degrades to no panel at all
+// instead of breaking the results view.
+function parseExplanation(raw: unknown): AnalysisExplanation | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+
+  const data = raw as Record<string, unknown>;
+
+  if (
+    typeof data.summary !== 'string' ||
+    !data.summary ||
+    !Array.isArray(data.reasons) ||
+    !Array.isArray(data.contributions)
+  ) {
+    return undefined;
+  }
+
+  const contributions = (data.contributions as any[])
+    .filter(
+      (item) =>
+        item &&
+        typeof item.name === 'string' &&
+        typeof item.value === 'string' &&
+        isUsableScore(item.score) &&
+        isUsableScore(item.points)
+    )
+    .map((item) => ({
+      name: item.name,
+      value: item.value,
+      score: clamp(item.score, 0, 100),
+      points: clamp(item.points, 0, 100),
+    }));
+
+  return {
+    summary: data.summary,
+
+    reasons: (data.reasons as unknown[]).filter(
+      (reason): reason is string => typeof reason === 'string' && !!reason
+    ),
+
+    contributions,
+
+    caveat:
+      typeof data.caveat === 'string' && data.caveat
+      ? data.caveat
+      : undefined,
+  };
 }
 
 function getSignalDescription(
@@ -186,14 +235,14 @@ export async function analyzeMedia(
 
     format,
 
-      fileSize: `${fileSizeMB} MB`,
+    fileSize: `${fileSizeMB} MB`,
 
-      signals: (data.signals || []).map(
-        (signal: any) => ({
-          name: signal.name || 'Detection Signal',
+    signals: (data.signals || []).map(
+      (signal: any) => ({
+        name: signal.name || 'Detection Signal',
 
-          value:
-          isUsableScore(signal.score)
+        value:
+        isUsableScore(signal.score)
         ? `${signal.value || 'UNKNOWN'} • ${signal.score.toFixed(1)}%`
         : signal.value || 'NO SCORE',
 
@@ -201,14 +250,16 @@ export async function analyzeMedia(
           signal,
           data.provider || ''
         ),
-        })
-      ),
+      })
+    ),
 
-      recommendation: getRecommendation(
-        riskScore,
-        typeof data.prediction === 'string' && data.prediction
-        ? data.prediction
-        : 'INCONCLUSIVE'
-      ),
+    explanation: parseExplanation(data.explanation),
+
+    recommendation: getRecommendation(
+      riskScore,
+      typeof data.prediction === 'string' && data.prediction
+      ? data.prediction
+      : 'INCONCLUSIVE'
+    ),
   };
 }

@@ -5,6 +5,7 @@ import { FilePreview } from './components/FilePreview';
 import { AnalysisLoader } from './components/AnalysisLoader';
 import { RiskMeter } from './components/RiskMeter';
 import { ResultSummary } from './components/ResultSummary';
+import { ExplanationPanel } from './components/ExplanationPanel';
 import { SecurityRecommendation } from './components/SecurityRecommendation';
 import { AnalysisDetails } from './components/AnalysisDetails';
 import { MediaDetails } from './components/MediaDetails';
@@ -215,6 +216,11 @@ export default function App() {
               <ResultSummary
               score={result.riskScore}
               prediction={result.prediction}
+              />
+
+              {/* Explainable AI: score breakdown + decision rationale */}
+              <ExplanationPanel
+              explanation={result.explanation}
               />
 
               {/* Security advice */}
