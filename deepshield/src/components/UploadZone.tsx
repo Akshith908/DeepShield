@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { UploadCloud, FileImage, FileVideo, FileAudio, AlertTriangle } from 'lucide-react';
+import { UploadCloud, FileImage, FileVideo, AlertTriangle } from 'lucide-react';
 
 interface UploadZoneProps {
   onFileSelect: (file: File) => void;
@@ -9,18 +9,44 @@ interface UploadZoneProps {
 // user never waits through a long upload only to get a 413 from the server.
 const MAX_FILE_MB = 100;
 
+// Mirrors the backend's audio extensions, so an audio file with an empty or
+// unhelpful MIME type is still blocked while Reality Defender is unavailable.
+const AUDIO_EXTENSIONS = [
+  '.mp3',
+  '.wav',
+  '.m4a',
+  '.aac',
+  '.ogg',
+  '.flac',
+  '.alac',
+  '.mp2',
+  '.mpeg',
+];
+
 export function UploadZone({ onFileSelect }: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const validate = (file: File): string | null => {
+    // Audio analysis is routed to Reality Defender, whose quota and
+    // credentials are unresolved. Audio uploads are disabled here so users
+    // never submit a file that is guaranteed to fail; the backend still
+    // validates every media type and returns a sanitized 424 for audio.
+    const name = file.name.toLowerCase();
+
+    if (
+      file.type.startsWith('audio/') ||
+      AUDIO_EXTENSIONS.some((extension) => name.endsWith(extension))
+    ) {
+      return 'Audio analysis is temporarily unavailable. Please upload an image or video.';
+    }
+
     const isValidFileType =
       file.type.startsWith('image/') ||
-      file.type.startsWith('video/') ||
-      file.type.startsWith('audio/');
+      file.type.startsWith('video/');
 
     if (!isValidFileType) {
-      return 'Unsupported file type. Please upload an image, video, or audio file.';
+      return 'Unsupported file type. Please upload an image or video file.';
     }
 
     if (file.size === 0) {
@@ -99,27 +125,28 @@ export function UploadZone({ onFileSelect }: UploadZoneProps) {
           Analyze Suspicious Media
         </h3>
         <p className="text-gray-400 mb-8 max-w-md relative z-10">
-          Upload an image, video, or audio file to assess potential AI manipulation risk.
+          Upload an image or video to assess potential AI manipulation risk.
         </p>
 
-        <div className="flex gap-6 mb-8 relative z-10">
+        <div className="flex gap-6 mb-4 relative z-10">
           <div className="flex items-center gap-2 text-sm text-gray-400">
             <FileImage className="h-4 w-4" /> Images
           </div>
           <div className="flex items-center gap-2 text-sm text-gray-400">
             <FileVideo className="h-4 w-4" /> Videos
           </div>
-          <div className="flex items-center gap-2 text-sm text-gray-400">
-            <FileAudio className="h-4 w-4" /> Audio
-          </div>
         </div>
+
+        <p className="mb-8 text-xs text-gray-500 relative z-10">
+          Audio analysis is temporarily unavailable.
+        </p>
 
         <label className="relative z-10 cursor-pointer inline-flex items-center justify-center px-8 py-3.5 text-sm font-semibold text-navy-900 bg-electric-blue rounded-lg shadow-[0_0_20px_rgba(0,229,255,0.3)] hover:bg-cyan-accent transition-colors duration-200">
           <span>Choose File</span>
           <input
             type="file"
             className="hidden"
-            accept="image/*,video/*,audio/*"
+            accept="image/*,video/*"
             onChange={handleFileInput}
           />
         </label>

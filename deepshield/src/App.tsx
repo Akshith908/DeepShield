@@ -140,9 +140,9 @@ export default function App() {
         </h1>
 
         <p className="text-lg md:text-xl text-gray-400 max-w-2xl mx-auto leading-relaxed">
-        Analyze suspicious images, videos, and audio for
-        potential AI-generated or manipulated content before
-        you trust, share, or act on them.
+        Analyze suspicious images and videos for potential
+        AI-generated or manipulated content before you trust,
+        share, or act on them.
         </p>
 
         </div>
