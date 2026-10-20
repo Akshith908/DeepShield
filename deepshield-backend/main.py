@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import shutil
@@ -30,8 +31,18 @@ from utils.ratelimit import (
     client_identity,
     request_limiter,
     analysis_slots,
+    SlidingWindowLimiter,
 )
 from services.analyzer import analyze_file
+
+# Local Grad-CAM explanations are CPU-bound rather than billable, but still
+# expensive, so they get their own budget: an explanation request can never
+# consume the paid /analyze allowance, and vice versa. The module is imported
+# eagerly but loads no weights (and imports no PyTorch) until /explain is hit.
+from services.gradcam_explainer import (
+    ExplainError,
+    explain_image_file,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -77,6 +88,12 @@ MAX_UPLOAD_MB = float(os.getenv("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB * 1024 * 1024)
 
 
+explanation_limiter = SlidingWindowLimiter(
+    max(1, int(os.getenv("EXPLAIN_RATE_LIMIT_MAX_REQUESTS", "20"))),
+    max(1.0, float(os.getenv("EXPLAIN_RATE_LIMIT_WINDOW_SECONDS", "600"))),
+)
+
+
 @app.get("/")
 def root():
     return {
@@ -90,6 +107,151 @@ def health():
     return {
         "status": "healthy",
     }
+
+
+@app.post("/explain")
+async def explain(
+    request: Request,
+    file: UploadFile = File(...)
+):
+    """Grad-CAM explanation from the local EfficientNet-B4 detector.
+
+    Deliberately separate from /analyze: the local model has its own cost,
+    latency and failure modes, and a missing checkpoint or a failed inference
+    must never affect the provider-backed analysis response.
+    """
+
+    retry_after = explanation_limiter.check(
+        client_identity(request)
+    )
+
+    if retry_after > 0:
+
+        wait = int(retry_after) + 1
+
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Visual-explanation rate limit reached. "
+                f"Try again in about {wait} seconds."
+            ),
+            headers={"Retry-After": str(wait)},
+        )
+
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="No file provided",
+        )
+
+    if get_media_type(file.filename) != "image":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Visual explanations are available for images only. "
+                "Videos and audio are analysed without a heatmap."
+            ),
+        )
+
+    raw_suffix = os.path.splitext(file.filename)[1]
+    suffix = raw_suffix if 0 < len(raw_suffix) <= 10 else ".bin"
+
+    temp_path = None
+    request_id = uuid.uuid4().hex[:12]
+
+    try:
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=suffix,
+        ) as temp_file:
+
+            temp_path = temp_file.name
+
+            bytes_written = 0
+
+            while True:
+
+                chunk = await file.read(1024 * 1024)
+
+                if not chunk:
+                    break
+
+                bytes_written += len(chunk)
+
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"File too large. Maximum is "
+                            f"{MAX_UPLOAD_MB:g} MB."
+                        ),
+                    )
+
+                temp_file.write(chunk)
+
+        # CPU-bound inference must not block the event loop.
+        result = await asyncio.to_thread(
+            explain_image_file,
+            temp_path,
+        )
+
+        result["request_id"] = request_id
+
+        logger.info(
+            "explain request=%s bytes=%d time=%.2fs model=%s",
+            request_id,
+            bytes_written,
+            result.get("processing_time", 0.0),
+            result.get("model_id", "unknown"),
+        )
+
+        return result
+
+    except ExplainError as error:
+
+        # Structured, sanitized detail: the frontend shows `message` and uses
+        # `code` to distinguish "no face" from "model unavailable".
+        logger.info(
+            "explain request=%s failed code=%s",
+            request_id,
+            error.code,
+        )
+
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={
+                "code": error.code,
+                "message": error.message,
+            },
+        ) from error
+
+    except HTTPException:
+
+        raise
+
+    except Exception as error:
+
+        logger.exception(
+            "explain request=%s failed",
+            request_id,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "The visual explanation could not be generated. "
+                "The provider analysis above is unaffected."
+            ),
+        ) from error
+
+    finally:
+
+        if (
+            temp_path
+            and os.path.exists(temp_path)
+        ):
+            os.remove(temp_path)
 
 
 @app.post("/analyze")

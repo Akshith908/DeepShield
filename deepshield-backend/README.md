@@ -32,4 +32,36 @@ request budget or when too many analyses are already running. Counters are
 in-process, so they are per-worker: a multi-worker or multi-instance deployment
 needs a shared store instead.
 
+## Visual explanations (`POST /explain`, optional)
+
+Separate from `/analyze`: a local EfficientNet-B4 face classifier produces a
+genuine Grad-CAM heatmap (`honi05/deepfake-detection`, MIT, Celeb-DF v2 face
+crops). The provider flow is untouched — a missing checkpoint or a failed
+inference only affects this endpoint.
+
+```bash
+pip install -r requirements.txt -r requirements-gradcam.txt
+python3 scripts/download_model.py   # 72.8 MB, public, no token required
+```
+
+Weights are never committed (see `.gitignore`) and are loaded once per process
+on the first request. Without the ML extras installed, `POST /explain` returns
+`503 model_unavailable` and the rest of the API behaves exactly as before.
+
+The model's own prediction (`FAKE`/`REAL`) is reported separately from the
+provider verdict and never replaces it. Measured on 1 vCPU / 1.9 GB: ~1.0 s
+torch import, ~1.4 s model load, ~0.5-2 s per image, ~750 MB peak RSS.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `DEEPSHIELD_MODEL_PATH` | No | Checkpoint path (default `models/best_model.pt`) |
+| `DEEPSHIELD_EXPLANATION_MAX_SIDE` | No | Max overlay/heatmap edge in px (default `1024`) |
+| `DEEPSHIELD_MAX_PIXELS` / `DEEPSHIELD_MAX_IMAGE_SIDE` | No | Input guardrails (defaults 40 MP / 12000 px) |
+| `EXPLAIN_RATE_LIMIT_MAX_REQUESTS` / `EXPLAIN_RATE_LIMIT_WINDOW_SECONDS` | No | Separate budget for `/explain` (default 20 / 600 s) |
+| `DEEPSHIELD_GRADCAM_LOCK_TIMEOUT` | No | Seconds to wait for the inference lock (default `20`, then `429`) |
+
+Error codes returned in `detail.code`: `model_unavailable` (503),
+`no_face_detected` (422), `invalid_image` / `unsupported_format` (400),
+`image_too_large` (413), `inference_failed` (500), `busy` (429).
+
 The frontend reads its backend URL from `VITE_BACKEND_URL` (see `deepshield/README.md`).

@@ -1,0 +1,23 @@
+# Optional ML extras for POST /explain (local Grad-CAM explanations).
+#
+# Deliberately separate from requirements.txt so the existing provider-backed
+# /analyze deployment does not change or grow:
+#
+#   pip install -r requirements.txt -r requirements-gradcam.txt
+#
+# The CPU wheels matter: the default PyPI Linux wheel pulls multi-GB CUDA
+# runtime packages that a small instance cannot hold.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# torchvision 0.29 ships the EfficientNet-B4 definition the checkpoint was
+# trained with; torch 2.14 is the matching runtime.
+torch==2.14.1+cpu
+torchvision==0.29.1+cpu
+
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Face gating only. The bundled Haar cascade keeps this small; facenet-pytorch
+# is intentionally NOT used because it pins torch<2.3 and drags in CUDA wheels.
+# Pinned below 5: OpenCV 5 removed cv2.CascadeClassifier from the Python API.
+opencv-python-headless>=4.8,<5

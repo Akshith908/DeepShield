@@ -6,6 +6,7 @@ import { AnalysisLoader } from './components/AnalysisLoader';
 import { RiskMeter } from './components/RiskMeter';
 import { ResultSummary } from './components/ResultSummary';
 import { ExplanationPanel } from './components/ExplanationPanel';
+import { VisualExplanation } from './components/VisualExplanation';
 import { ProviderStatusStrip } from './components/ProviderStatusStrip';
 import { SecurityRecommendation } from './components/SecurityRecommendation';
 import { AnalysisDetails } from './components/AnalysisDetails';
@@ -252,6 +253,12 @@ export default function App() {
               />
 
               </div>
+
+              {/* Optional local Grad-CAM explanation. Images only: the local
+                  model is a face classifier and has no video/audio path. */}
+              {result.mediaType === 'image' && selectedFile && (
+                <VisualExplanation file={selectedFile} />
+              )}
 
               <div className="mt-12 flex flex-col items-center gap-6">
 

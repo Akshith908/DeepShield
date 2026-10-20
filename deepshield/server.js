@@ -2,7 +2,7 @@
  * DeepShield single-port launcher.
  *
  * Serves the React frontend via Vite middleware and runs the FastAPI
- * backend as a child process, proxying /analyze (and /api/*) to it.
+ * backend as a child process, proxying /analyze, /explain (and /api/*) to it.
  * This lets one process/port serve the whole app — required for the
  * Freebuff preview and convenient for local dev.
  *
@@ -94,7 +94,7 @@ function waitForBackend(retries = 100, delayMs = 300) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Proxy /analyze and /api/* to the backend (same-origin, so no CORS pain)
+// 2. Proxy /analyze, /explain and /api/* to the backend (same-origin, so no CORS pain)
 // ---------------------------------------------------------------------------
 
 function proxyToBackend(req, res, upstreamPath) {
@@ -136,6 +136,10 @@ const app = express();
 
 app.use((req, res, next) => {
   if (req.path === '/analyze') {
+    return proxyToBackend(req, res, req.originalUrl);
+  }
+  // /explain is the local Grad-CAM endpoint: it uses the same backend as /analyze.
+  if (req.path === '/explain') {
     return proxyToBackend(req, res, req.originalUrl);
   }
   // /api/<rest> maps onto backend routes: /api/health -> /health

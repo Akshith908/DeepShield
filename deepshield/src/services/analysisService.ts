@@ -1,4 +1,9 @@
-import { AnalysisExplanation, AnalysisResult, ProviderOutcome } from '../types/analysis';
+import {
+  AnalysisExplanation,
+  AnalysisResult,
+  ProviderOutcome,
+  VisualExplanation,
+} from '../types/analysis';
 
 // Backend endpoint, overridable per environment via VITE_BACKEND_URL.
 // Default '' = same origin: `npm start` (server.js) runs the FastAPI
@@ -9,9 +14,17 @@ const BACKEND_BASE =
 
 const BACKEND_URL = BACKEND_BASE.replace(/\/$/, '') + '/analyze';
 
+// Separate endpoint: local Grad-CAM inference is optional, CPU-bound work that
+// must never delay or invalidate the provider-backed analysis above.
+const EXPLANATION_URL = BACKEND_BASE.replace(/\/$/, '') + '/explain';
+
 // Hard cap on a single analysis request (video can legitimately take a
 // while, but the UI should never hang forever on a dead server).
 const REQUEST_TIMEOUT_MS = 330_000;
+
+// Local inference is fast when warm (~1-3s), but the first request after a
+// cold start also loads the 72.8 MB checkpoint.
+const EXPLANATION_TIMEOUT_MS = 120_000;
 
 // Provider responses are untrusted input: a missing or malformed field must
 // degrade to a sane default instead of rendering "NaN%" in the gauge.
@@ -350,5 +363,136 @@ export async function analyzeMedia(
       ? data.prediction
       : 'INCONCLUSIVE'
     ),
+  };
+}
+
+/** Error with a machine-readable code from POST /explain. */
+export class VisualExplanationError extends Error {
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'VisualExplanationError';
+    this.code = code;
+  }
+}
+
+function isDataImageUri(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('data:image/');
+}
+
+/**
+ * Request a Grad-CAM explanation from the local model.
+ *
+ * Strict by design: a payload missing the heatmap/overlay is an error, never a
+ * partially rendered explanation, so a failed generation can never look like a
+ * successful one.
+ */
+export async function explainImage(
+  file: File
+): Promise<VisualExplanation> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    EXPLANATION_TIMEOUT_MS
+  );
+
+  let response: Response;
+
+  try {
+    response = await fetch(EXPLANATION_URL, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new VisualExplanationError(
+        'timeout',
+        'The visual explanation took too long and was cancelled.'
+      );
+    }
+
+    throw new VisualExplanationError(
+      'network_error',
+      'Could not reach the visual-explanation service.'
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  let data: any;
+
+  try {
+    data = await response.json();
+  } catch {
+    throw new VisualExplanationError(
+      'invalid_response',
+      'The visual-explanation service returned an invalid response.'
+    );
+  }
+
+  if (!response.ok) {
+    const detail = data?.detail;
+    const code =
+      detail && typeof detail === 'object' && typeof detail.code === 'string'
+        ? detail.code
+        : `http_${response.status}`;
+
+    const message =
+      detail && typeof detail === 'object' && typeof detail.message === 'string'
+        ? detail.message
+        : typeof detail === 'string'
+        ? detail
+        : 'The visual explanation could not be generated.';
+
+    throw new VisualExplanationError(code, message);
+  }
+
+  if (!data.success || !isDataImageUri(data.heatmap) || !isDataImageUri(data.overlay)) {
+    throw new VisualExplanationError(
+      'invalid_response',
+      'The visual-explanation service returned an incomplete result.'
+    );
+  }
+
+  // Never coerce an unexpected label into a verdict: an unrecognised value
+  // means we cannot honestly describe the local model's output.
+  if (data.local_prediction !== 'FAKE' && data.local_prediction !== 'REAL') {
+    throw new VisualExplanationError(
+      'invalid_response',
+      'The visual-explanation service returned an unrecognised prediction.'
+    );
+  }
+
+  const prediction: 'FAKE' | 'REAL' = data.local_prediction;
+
+  return {
+    modelId:
+      typeof data.model_id === 'string' && data.model_id
+        ? data.model_id
+        : 'unknown model',
+    modelSource:
+      typeof data.model_source === 'string' ? data.model_source : '',
+    gradcamLayer:
+      typeof data.gradcam_layer === 'string' ? data.gradcam_layer : 'unknown',
+    localPrediction: prediction,
+    localConfidence: clamp(toFiniteNumber(data.local_confidence, 50), 0, 100),
+    fakeProbability: clamp(toFiniteNumber(data.fake_probability, 50), 0, 100),
+    heatmap: data.heatmap,
+    overlay: data.overlay,
+    imageWidth: Math.max(0, Math.round(toFiniteNumber(data.image_width, 0))),
+    imageHeight: Math.max(0, Math.round(toFiniteNumber(data.image_height, 0))),
+    overlayWidth: Math.max(0, Math.round(toFiniteNumber(data.overlay_width, 0))),
+    overlayHeight: Math.max(0, Math.round(toFiniteNumber(data.overlay_height, 0))),
+    processingTime: Math.max(0, toFiniteNumber(data.processing_time, 0)),
+    limitations: Array.isArray(data.limitations)
+      ? (data.limitations as unknown[]).filter(
+          (item): item is string => typeof item === 'string' && !!item
+        )
+      : [],
   };
 }

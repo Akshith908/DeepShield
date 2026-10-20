@@ -1,0 +1,4 @@
+# Local scratch smoke scripts for debugging /explain on a specific image.
+# These are not part of the Grad-CAM deliverable and must not be committed.
+smoke_explain.py
+smoke_custom_image.py

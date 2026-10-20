@@ -121,6 +121,28 @@ Backend (`deepshield-backend/.env`) — see
 }
 ```
 
+`POST /explain` — optional local Grad-CAM explanation for images. Returns the
+local model's own `FAKE`/`REAL` verdict plus `heatmap` and `overlay` PNG data
+URIs on the analysed image's frame:
+
+```jsonc
+{
+  "success": true,
+  "model_id": "honi05/deepfake-detection:efficientnet-b4-celebdf",
+  "local_prediction": "FAKE",          // FAKE | REAL (local model only)
+  "local_confidence": 87.4,             // uncalibrated sigmoid of the predicted class
+  "heatmap": "data:image/png;base64,…",
+  "overlay": "data:image/png;base64,…",
+  "processing_time": 1.2,
+  "limitations": ["…"]
+}
+```
+
+It is deliberately independent of `/analyze`: the UI calls it only when the
+user asks, and a failure there never changes the provider verdict or risk
+score. See the [backend README](deepshield-backend/README.md) for the optional
+ML install and the checkpoint download step.
+
 Also: `GET /health`, `GET /` on the backend; everything is proxied
 same-origin through the frontend port when using `npm start`.
 

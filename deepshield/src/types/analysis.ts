@@ -30,6 +30,35 @@ export interface AnalysisExplanation {
   caveat?: string;
 }
 
+// Local Grad-CAM explanation from POST /explain. Deliberately separate from
+// AnalysisResult: it describes the local model's own decision, never a
+// provider verdict, and never feeds back into risk scores.
+export interface VisualExplanation {
+  modelId: string;
+  modelSource: string;
+  gradcamLayer: string;
+
+  // The local model is a binary face classifier: FAKE vs REAL.
+  localPrediction: 'FAKE' | 'REAL';
+
+  // Probability of the predicted class from the model's own sigmoid. Raw and
+  // uncalibrated — labelled as such in the UI.
+  localConfidence: number;
+  fakeProbability: number;
+
+  // PNG data URIs. Both share the analysed image's frame.
+  heatmap: string;
+  overlay: string;
+
+  imageWidth: number;
+  imageHeight: number;
+  overlayWidth: number;
+  overlayHeight: number;
+
+  processingTime: number;
+  limitations: string[];
+}
+
 export interface AnalysisResult {
   riskScore: number;
 
